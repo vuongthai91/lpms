@@ -4,25 +4,62 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"reflect"
-	"runtime/debug"
 	"time"
 
 	"github.com/golang/glog"
+	"github.com/livepeer/go-livepeer/common"
 	"github.com/nareix/joy4/av"
 )
 
+type dst struct {
+	mux     av.MuxCloser
+	errchan chan error
+}
+
 type BasicRTMPVideoStream struct {
-	streamID    string
-	buffer      *streamBuffer
+	streamID string
+	// buffer      *streamBuffer
+	dataChan    chan av.Packet
 	RTMPTimeout time.Duration
 	header      []av.CodecData
+	dsts        []dst
 }
 
 //NewBasicRTMPVideoStream creates a new BasicRTMPVideoStream.  The default RTMPTimeout is set to 10 milliseconds because we assume all RTMP streams are local.
 func NewBasicRTMPVideoStream(id string) *BasicRTMPVideoStream {
-	// return &BasicRTMPVideoStream{buffer: newStreamBuffer(), streamID: id, RTMPTimeout: 10 * time.Millisecond}
-	return &BasicRTMPVideoStream{buffer: newStreamBuffer(), streamID: id}
+	strm := &BasicRTMPVideoStream{
+		dataChan: make(chan av.Packet),
+		streamID: id,
+		dsts:     make([]dst, 0, 0),
+	}
+
+	go func(strm *BasicRTMPVideoStream) {
+		for {
+			select {
+			case data, ok := <-strm.dataChan:
+				if !ok {
+					for _, dst := range strm.dsts {
+						if err := dst.mux.WriteTrailer(); err != nil {
+							glog.Errorf("Error writing RTMP trailer from Stream %v", strm.streamID)
+							dst.errchan <- err
+							// return
+						}
+					}
+					return
+				}
+				for i, dst := range strm.dsts {
+					if err := dst.mux.WritePacket(data); err != nil {
+						glog.Errorf("Error writing RTMP packet from Stream %v to mux: %v", strm.streamID, err)
+						strm.dsts = append(strm.dsts[:i], strm.dsts[i+1:]...)
+						dst.errchan <- err
+						// return
+					}
+				}
+			}
+		}
+	}(strm)
+
+	return strm
 }
 
 func (s *BasicRTMPVideoStream) GetStreamID() string {
@@ -34,43 +71,25 @@ func (s *BasicRTMPVideoStream) GetStreamFormat() VideoFormat {
 }
 
 //ReadRTMPFromStream reads the content from the RTMP stream out into the dst.
-func (s *BasicRTMPVideoStream) ReadRTMPFromStream(ctx context.Context, dst av.MuxCloser) error {
-	defer dst.Close()
+func (s *BasicRTMPVideoStream) ReadRTMPFromStream(ctx context.Context, dstMux av.MuxCloser) error {
+	defer dstMux.Close()
 
-	//TODO: Make sure to listen to ctx.Done()
-	for {
-		item, err := s.buffer.poll(ctx, s.RTMPTimeout)
-		if err != nil {
-			return err
-		}
-
-		switch item.(type) {
-		case []av.CodecData:
-			headers := item.([]av.CodecData)
-			err = dst.WriteHeader(headers)
-			if err != nil {
-				glog.Errorf("Error writing RTMP header from Stream %v to mux", s.streamID)
-				return err
-			}
-		case av.Packet:
-			packet := item.(av.Packet)
-			err = dst.WritePacket(packet)
-			if err != nil {
-				glog.Errorf("Error writing RTMP packet from Stream %v to mux: %v", s.streamID, err)
-				return err
-			}
-		case RTMPEOF:
-			err := dst.WriteTrailer()
-			if err != nil {
-				glog.Errorf("Error writing RTMP trailer from Stream %v", s.streamID)
-				return err
-			}
-			return io.EOF
-		default:
-			glog.Errorf("Cannot recognize buffer iteam type: ", reflect.TypeOf(item))
-			debug.PrintStack()
-			return ErrBufferItemType
-		}
+	//Wait for a little bit - sometimes the header gets populated a little later.
+	common.WaitUntil(time.Millisecond*300, func() bool {
+		return len(s.header) != 0
+	})
+	if len(s.header) == 0 {
+		return io.EOF
+	}
+	if err := dstMux.WriteHeader(s.header); err != nil {
+		glog.Errorf("Error writing RTMP header from Stream %v to mux", s.streamID)
+		return err
+	}
+	errchan := make(chan error)
+	s.dsts = append(s.dsts, dst{mux: dstMux, errchan: errchan})
+	select {
+	case err := <-errchan:
+		return err
 	}
 }
 
@@ -88,20 +107,10 @@ func (s *BasicRTMPVideoStream) WriteRTMPToStream(ctx context.Context, src av.Dem
 	c := make(chan error, 1)
 	go func() {
 		c <- func() error {
-			header, err := src.Streams()
-			if err != nil {
-				return err
-			}
-			err = s.buffer.push(header)
-			if err != nil {
-				return err
-			}
-
-			// var lastKeyframe av.Packet
 			for {
 				packet, err := src.ReadPacket()
 				if err == io.EOF {
-					s.buffer.push(RTMPEOF{})
+					close(s.dataChan)
 					return err
 				} else if err != nil {
 					return err
@@ -109,14 +118,7 @@ func (s *BasicRTMPVideoStream) WriteRTMPToStream(ctx context.Context, src av.Dem
 					return ErrDroppedRTMPStream
 				}
 
-				if packet.IsKeyFrame {
-					// lastKeyframe = packet
-				}
-
-				err = s.buffer.push(packet)
-				if err == ErrBufferFull {
-					//TODO: Delete all packets until last keyframe, insert headers in front - trying to get rid of streaming artifacts.
-				}
+				s.dataChan <- packet
 			}
 		}()
 	}()

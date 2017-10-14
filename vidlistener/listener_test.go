@@ -37,14 +37,15 @@ func TestListener(t *testing.T) {
 			return nil
 		})
 
+	//Start the server
+	go listener.RtmpServer.ListenAndServe()
+	time.Sleep(time.Millisecond * 500)
+
 	//Stream test stream into the rtmp server
 	ffmpegCmd := "ffmpeg"
 	ffmpegArgs := []string{"-re", "-i", "../data/bunny2.mp4", "-c", "copy", "-f", "flv", "rtmp://localhost:1937/movie"}
 	cmd := exec.Command(ffmpegCmd, ffmpegArgs...)
 	go cmd.Run()
-
-	//Start the server
-	go listener.RtmpServer.ListenAndServe()
 
 	//Wait for the stream to run for a little, then finish.
 	time.Sleep(time.Second * 1)
