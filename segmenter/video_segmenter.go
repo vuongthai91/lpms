@@ -28,6 +28,7 @@ var PlaylistRetryWait = 500 * time.Millisecond
 type SegmenterOptions struct {
 	EnforceKeyframe bool //Enforce each segment starts with a keyframe
 	SegLength       time.Duration
+	WinSize         uint
 }
 
 type VideoSegment struct {
@@ -78,7 +79,12 @@ func (s *FFMpegVideoSegmenter) RTMPToHLS(ctx context.Context, opt SegmenterOptio
 	seglen := strconv.FormatFloat(opt.SegLength.Seconds(), 'f', 6, 64)
 	ret := ffmpeg.RTMPToHLS(s.LocalRtmpUrl, outp, ts_tmpl, seglen)
 	if cleanup {
-		s.Cleanup()
+		go func() {
+			// clean up after 2x the window time, allows streams to play out
+			plen := time.Duration(int64(float64(2*opt.WinSize)*opt.SegLength.Seconds())) * time.Second
+			time.Sleep(plen)
+			s.Cleanup()
+		}()
 	}
 	return ret
 }

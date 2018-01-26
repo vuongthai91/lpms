@@ -84,7 +84,8 @@ func main() {
 			rtmpStrm = rs
 
 			// //Segment the video into HLS (If we need multiple outlets for the HLS stream, we'd need to create a buffer.  But here we only have one outlet for the transcoder)
-			hlsStrm = stream.NewBasicHLSVideoStream(randString(10), 3)
+			opt := segmenter.SegmenterOptions{SegLength: 4 * time.Second, WinSize: 3}
+			hlsStrm = stream.NewBasicHLSVideoStream(randString(10), opt.WinSize)
 			// var subscriber func(*stream.HLSSegment, bool)
 			// subscriber, err = transcode(hlsStrm)
 			// if err != nil {
@@ -92,7 +93,6 @@ func main() {
 			// }
 			// hlsStrm.SetSubscriber(subscriber)
 			// glog.Infof("After set subscriber")
-			opt := segmenter.SegmenterOptions{SegLength: 8 * time.Second}
 			var ctx context.Context
 			ctx, cancelSeg = context.WithCancel(context.Background())
 
