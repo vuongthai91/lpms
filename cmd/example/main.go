@@ -185,6 +185,22 @@ func main() {
 	lpms.Start(context.Background())
 }
 
+func openOutputs(outs []string) [][]byte {
+	if outs == nil {
+		return nil
+	}
+	dout := make([][]byte, len(outs), len(outs))
+	for i, ofile := range outs {
+		d, err := ioutil.ReadFile(ofile)
+		if err != nil {
+			fmt.Errorf("Cannot read transcode output: %v", err)
+		}
+		dout[i] = d
+		os.Remove(ofile)
+	}
+	return dout
+}
+
 func transcode(hlsStream stream.HLSVideoStream) (func(*stream.HLSSegment, bool), error) {
 	//Create Transcoder
 	profiles := []ffmpeg.VideoProfile{
@@ -221,10 +237,11 @@ func transcode(hlsStream stream.HLSVideoStream) (func(*stream.HLSSegment, bool),
 		}
 
 		//Transcode stream
-		tData, err := t.Transcode(file.Name())
+		outfiles, err := t.Transcode(file.Name())
 		if err != nil {
 			glog.Errorf("Error transcoding: %v", err)
 		}
+		tData := openOutputs(outfiles)
 
 		//Insert into HLS stream
 		for i, strmID := range strmIDs {

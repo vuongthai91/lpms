@@ -2,8 +2,6 @@ package transcoder
 
 import (
 	"fmt"
-	"io/ioutil"
-	"os"
 	"path"
 	"path/filepath"
 
@@ -21,7 +19,7 @@ func NewFFMpegSegmentTranscoder(ps []ffmpeg.VideoProfile, workd string) *FFMpegS
 	return &FFMpegSegmentTranscoder{tProfiles: ps, workDir: workd}
 }
 
-func (t *FFMpegSegmentTranscoder) Transcode(fname string) ([][]byte, error) {
+func (t *FFMpegSegmentTranscoder) Transcode(fname string) ([]string, error) {
 	//Invoke ffmpeg
 	err := ffmpeg.Transcode(fname, t.workDir, t.tProfiles)
 	if err != nil {
@@ -29,15 +27,9 @@ func (t *FFMpegSegmentTranscoder) Transcode(fname string) ([][]byte, error) {
 		return nil, err
 	}
 
-	dout := make([][]byte, len(t.tProfiles), len(t.tProfiles))
+	dout := make([]string, len(t.tProfiles), len(t.tProfiles))
 	for i, _ := range t.tProfiles {
-		ofile := path.Join(t.workDir, fmt.Sprintf("out%v%v", i, filepath.Base(fname)))
-		d, err := ioutil.ReadFile(ofile)
-		if err != nil {
-			glog.Errorf("Cannot read transcode output: %v", err)
-		}
-		dout[i] = d
-		os.Remove(ofile)
+		dout[i] = path.Join(t.workDir, fmt.Sprintf("out%v%v", i, filepath.Base(fname)))
 	}
 
 	return dout, nil

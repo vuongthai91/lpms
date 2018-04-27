@@ -16,6 +16,22 @@ func Over1Pct(val int, cmp int) bool {
 	return float32(val) > float32(cmp)*1.01 || float32(val) < float32(cmp)*0.99
 }
 
+func openOutputs(outs []string) [][]byte {
+	if outs == nil {
+		return nil
+	}
+	dout := make([][]byte, len(outs), len(outs))
+	for i, ofile := range outs {
+		d, err := ioutil.ReadFile(ofile)
+		if err != nil {
+			fmt.Errorf("Cannot read transcode output: %v", err)
+		}
+		dout[i] = d
+		os.Remove(ofile)
+	}
+	return dout
+}
+
 func TestTrans(t *testing.T) {
 	configs := []ffmpeg.VideoProfile{
 		ffmpeg.P144p30fps16x9,
@@ -24,7 +40,8 @@ func TestTrans(t *testing.T) {
 	}
 	ffmpeg.InitFFmpeg()
 	tr := NewFFMpegSegmentTranscoder(configs, "./")
-	r, err := tr.Transcode("test.ts")
+	ofiles, err := tr.Transcode("test.ts")
+	r := openOutputs(ofiles)
 	ffmpeg.DeinitFFmpeg()
 	if err != nil {
 		t.Errorf("Error transcoding: %v", err)
@@ -69,7 +86,8 @@ func TestTooManyProfiles(t *testing.T) {
 	}
 	ffmpeg.InitFFmpeg()
 	tr := NewFFMpegSegmentTranscoder(configs, "./")
-	_, err := tr.Transcode("test.ts")
+	outs, err := tr.Transcode("test.ts")
+	openOutputs(outs)
 	ffmpeg.DeinitFFmpeg()
 	if err == nil {
 		t.Errorf("Expected an error transcoding too many segments")
@@ -106,7 +124,8 @@ func (s *StreamTest) CmdCompareSize(cmd string, sz int) error {
 	if err != nil {
 		return errors.New(fmt.Sprintf("Unable to run ffmpeg %v %v- %v", cmd, s.Tempfile, err))
 	}
-	r, err := s.Transcoder.Transcode(s.Tempfile)
+	o, err := s.Transcoder.Transcode(s.Tempfile)
+	r := openOutputs(o)
 	if err != nil {
 		return errors.New(fmt.Sprintf("Error transcoding ", err))
 	}
@@ -151,7 +170,8 @@ func TestInvalidFile(t *testing.T) {
 	defer ffmpeg.DeinitFFmpeg()
 
 	// nonexistent file
-	_, err := tr.Transcode("nothere.ts")
+	o, err := tr.Transcode("nothere.ts")
+	openOutputs(o)
 	if err == nil {
 		t.Errorf("Expected an error transcoding a nonexistent file")
 	} else if err.Error() != "No such file or directory" {
@@ -164,7 +184,8 @@ func TestInvalidFile(t *testing.T) {
 	if os.IsNotExist(err) {
 		t.Errorf("The file '%v' does not exist", thisfile)
 	}
-	_, err = tr.Transcode(thisfile)
+	o, err = tr.Transcode(thisfile)
+	openOutputs(o)
 	if err == nil {
 		t.Errorf("Expected an error transcoding an invalid file")
 	} else if err.Error() != "Invalid data found when processing input" {
@@ -180,7 +201,8 @@ func TestInvalidFile(t *testing.T) {
 	if err != nil {
 		t.Error(err)
 	}
-	_, err = st.Transcoder.Transcode("test.ts")
+	o, err = st.Transcoder.Transcode("test.ts")
+	openOutputs(o)
 	// XXX Make the returned error more descriptive;
 	// here x264 doesn't like odd heights
 	if err == nil || err.Error() != "Generic error in an external library" {
@@ -189,7 +211,8 @@ func TestInvalidFile(t *testing.T) {
 
 	// test bad output file names / directories
 	tr = NewFFMpegSegmentTranscoder(configs, "/asdf/qwerty!")
-	_, err = tr.Transcode("test.ts")
+	o, err = tr.Transcode("test.ts")
+	openOutputs(o)
 	if err == nil || err.Error() != "No such file or directory" {
 		t.Error(err)
 	}

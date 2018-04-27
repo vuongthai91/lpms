@@ -65,6 +65,7 @@ func Transcode(input string, workDir string, ps []VideoProfile) error {
 	ret := int(C.lpms_transcode(inp, (*C.output_params)(&params[0]), C.int(len(params))))
 	C.free(unsafe.Pointer(inp))
 	if 0 != ret {
+		// XXX dodo with potential lingering output files?
 		glog.Infof("Transcoder Return : %v\n", Strerror(ret))
 		return ErrorMap[ret]
 	}
