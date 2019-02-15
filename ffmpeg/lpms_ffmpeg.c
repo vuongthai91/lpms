@@ -559,6 +559,18 @@ dec_flush:
 #undef dec_err
 }
 
+int write_out(AVPacket *pkt, AVRational tb, AVStream *ost, AVFormatContext *oc)
+{
+  // packet bookkeeping.  XXX use av_rescale_delta for audio
+  pkt->stream_index = ost->index;
+  if (av_cmp_q(tb, ost->time_base)) {
+    pkt->pts = av_rescale_q_rnd(pkt->pts, tb, ost->time_base, AV_ROUND_NEAR_INF | AV_ROUND_PASS_MINMAX);
+    pkt->dts = av_rescale_q_rnd(pkt->dts, tb, ost->time_base, AV_ROUND_NEAR_INF | AV_ROUND_PASS_MINMAX);
+    pkt->duration = av_rescale_q(pkt->duration, tb, ost->time_base);
+  }
+  return av_interleaved_write_frame(oc, pkt);
+}
+
 int process_out(struct output_ctx *octx, AVCodecContext *encoder, AVStream *ost,
   struct filter_ctx *filter, AVFrame *inf)
 {
@@ -599,15 +611,7 @@ int process_out(struct output_ctx *octx, AVCodecContext *encoder, AVStream *ost,
   } else proc_err("Trying to transmux") // XXX pass in the inpacket, set  pkt = ipkt
 
 
-  // packet bookkeeping.  XXX use av_rescale_delta for audio
-  pkt.stream_index = ost->index;
-  if (av_cmp_q(tb, ost->time_base)) {
-    pkt.pts = av_rescale_q_rnd(pkt.pts, tb, ost->time_base, AV_ROUND_NEAR_INF | AV_ROUND_PASS_MINMAX);
-    pkt.dts = av_rescale_q_rnd(pkt.dts, tb, ost->time_base, AV_ROUND_NEAR_INF | AV_ROUND_PASS_MINMAX);
-    pkt.duration = av_rescale_q(pkt.duration, encoder->time_base, ost->time_base);
-  }
-
-  ret = av_interleaved_write_frame(octx->oc, &pkt);
+  ret = write_out(&pkt, tb, ost, octx->oc);
   if (ret < 0) proc_err("Error writing frame\n"); // XXX handle better?
 
 proc_cleanup:
@@ -622,8 +626,10 @@ proc_cleanup:
 int lpms_transcode(char *inp, output_params *params, int nb_outputs)
 {
 #define main_err(msg) { \
+  char errstr[AV_ERROR_MAX_STRING_SIZE] = {0}; \
   if (!ret) ret = AVERROR(EINVAL); \
-  fprintf(stderr, msg); \
+  if (ret < -1) av_strerror(ret, errstr, sizeof errstr); \
+  fprintf(stderr, "%s: %s", msg, errstr); \
   goto transcode_cleanup; \
 }
   int ret = 0, i = 0;
@@ -695,9 +701,10 @@ int lpms_transcode(char *inp, output_params *params, int nb_outputs)
         filter = &octx->af;
       } else main_err("transcoder: Got unknown stream\n"); // XXX could be legit; eg subs, secondary streams
 
-      ret = process_out(octx, encoder, ost, filter, dframe);
+      if (encoder) ret = process_out(octx, encoder, ost, filter, dframe);
+      else ret = write_out(&ipkt, ist->time_base, ost, octx->oc);
       if (AVERROR(EAGAIN) == ret || AVERROR_EOF == ret) continue;
-      else if (ret < 0) main_err("transcoder: verybad\n");
+      else if (ret < 0) main_err("transcoder: error processing\n");
     }
 
 whileloop_end:
